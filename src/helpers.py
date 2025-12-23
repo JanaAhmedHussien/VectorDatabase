@@ -1,19 +1,13 @@
-# helpers.py
-
 import re
 
-def clean_text(text):
-    """
-    Normalize text by removing extra spaces and special characters.
-    """
+def clean_text(text: str) -> str:
+    """Normalize text by removing extra spaces."""
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
-def chunk_text(text, chunk_size=300):
-    """
-    Split text into chunks of fixed word length.
-    """
+def chunk_text(text: str, chunk_size: int = 300):
+    """Split text into word-based chunks."""
     words = text.split()
     return [
         " ".join(words[i:i + chunk_size])

@@ -1,5 +1,3 @@
-# rag.py
-
 import os
 import json
 import numpy as np
@@ -8,77 +6,79 @@ from sentence_transformers import SentenceTransformer
 from helpers import clean_text, chunk_text
 
 # -----------------------------
-# Configuration
+# Paths
 # -----------------------------
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_FOLDER = os.path.join(BASE_DIR, "data", "raw")
-VECTOR_STORE_DIR = os.path.join(BASE_DIR, "src", "vector_store")
-FEEDBACK_FILE = os.path.join(VECTOR_STORE_DIR, "feedback.log")
+VECTOR_STORE = os.path.join(BASE_DIR, "src", "vector_store")
+EMB_FILE = os.path.join(VECTOR_STORE, "embeddings.json")
+META_FILE = os.path.join(VECTOR_STORE, "metadata.json")
+FEEDBACK_FILE = os.path.join(VECTOR_STORE, "feedback.log")
 
-os.makedirs(VECTOR_STORE_DIR, exist_ok=True)
-
-# Load embedding model
-model = SentenceTransformer("all-MiniLM-L6-v2")
+os.makedirs(VECTOR_STORE, exist_ok=True)
 
 # -----------------------------
-# Document Loading
+# Models
+# -----------------------------
+embedder = SentenceTransformer("all-MiniLM-L6-v2")
+
+# -----------------------------
+# Document Loader
 # -----------------------------
 def load_documents():
-    documents = []
+    docs = []
 
     for category in os.listdir(DATA_FOLDER):
-        category_path = os.path.join(DATA_FOLDER, category)
-
-        if not os.path.isdir(category_path):
+        cat_path = os.path.join(DATA_FOLDER, category)
+        if not os.path.isdir(cat_path):
             continue
 
-        for file in os.listdir(category_path):
+        for file in os.listdir(cat_path):
             if file.endswith(".txt"):
-                with open(os.path.join(category_path, file), encoding="utf-8") as f:
+                with open(os.path.join(cat_path, file), encoding="utf-8") as f:
                     text = clean_text(f.read())
 
-                chunks = chunk_text(text)
-                for chunk in chunks:
-                    documents.append((chunk, file, category))
+                for chunk in chunk_text(text):
+                    docs.append((chunk, file, category))
 
-    return documents
+    return docs
 
 
 # -----------------------------
-# Vector Database Creation
+# Vector Store Creation
 # -----------------------------
-def create_vector_store(documents):
+def build_vector_store(documents):
     embeddings = {}
     metadata = {}
 
-    for idx, (text, filename, category) in enumerate(documents):
-        vector = model.encode(text)
-        vector = vector / norm(vector)  # normalize
+    for idx, (text, source, category) in enumerate(documents):
+        vec = embedder.encode(text)
+        vec = vec / norm(vec)
 
-        embeddings[str(idx)] = vector.tolist()
+        embeddings[str(idx)] = vec.tolist()
         metadata[str(idx)] = {
             "text": text,
-            "source": filename,
+            "source": source,
             "category": category
         }
 
-    with open(os.path.join(VECTOR_STORE_DIR, "embeddings.json"), "w") as f:
+    with open(EMB_FILE, "w") as f:
         json.dump(embeddings, f)
 
-    with open(os.path.join(VECTOR_STORE_DIR, "metadata.json"), "w") as f:
+    with open(META_FILE, "w") as f:
         json.dump(metadata, f)
 
-    print(f"Vector store created with {len(documents)} chunks.")
+    print(f" Vector store built with {len(documents)} chunks.")
 
 
 # -----------------------------
-# Vector Store Loading
+# Load Store
 # -----------------------------
 def load_vector_store():
-    with open(os.path.join(VECTOR_STORE_DIR, "embeddings.json")) as f:
+    with open(EMB_FILE) as f:
         embeddings = json.load(f)
 
-    with open(os.path.join(VECTOR_STORE_DIR, "metadata.json")) as f:
+    with open(META_FILE) as f:
         metadata = json.load(f)
 
     embeddings = {k: np.array(v) for k, v in embeddings.items()}
@@ -86,40 +86,70 @@ def load_vector_store():
 
 
 # -----------------------------
-# Retrieval
+# Feedback-Aware Learning
+# -----------------------------
+def load_feedback_scores():
+    scores = {}
+
+    if not os.path.exists(FEEDBACK_FILE):
+        return scores
+
+    with open(FEEDBACK_FILE, encoding="utf-8") as f:
+        for line in f:
+            parts = line.strip().split("\t")
+
+            # OLD FORMAT: query\tfeedback
+            if len(parts) == 2:
+                continue  # skip old entries
+
+            # NEW FORMAT: query\tchunk_id\tfeedback
+            _, chunk_id, feedback = parts
+
+            scores.setdefault(chunk_id, 0)
+            scores[chunk_id] += 1 if feedback == "YES" else -1
+
+    return scores
+
+
+
+# -----------------------------
+# Retrieval (SELF-LEARNING)
 # -----------------------------
 def retrieve(query, k=3):
     embeddings, metadata = load_vector_store()
+    feedback_scores = load_feedback_scores()
 
-    query_vec = model.encode(query)
-    query_vec = query_vec / norm(query_vec)
+    q_vec = embedder.encode(query)
+    q_vec = q_vec / norm(q_vec)
 
-    scores = {
-        idx: np.dot(query_vec, emb)
-        for idx, emb in embeddings.items()
-    }
+    scores = {}
+    for idx, emb in embeddings.items():
+        score = np.dot(q_vec, emb)
+        score += 0.15 * feedback_scores.get(idx, 0)  # learning effect
+        scores[idx] = score
 
     top_ids = sorted(scores, key=scores.get, reverse=True)[:k]
-    return [metadata[i]["text"] for i in top_ids]
+
+    return [(i, metadata[i]["text"]) for i in top_ids]
 
 
 # -----------------------------
-# Self-Learning Layer (BONUS)
+# Feedback Logger
 # -----------------------------
-def log_feedback(query, retrieved_chunks, feedback):
-    """
-    Store user feedback for future model improvement.
-    """
+def log_feedback(query, retrieved_chunks, is_helpful: bool):
+    label = "YES" if is_helpful else "NO"
+
     with open(FEEDBACK_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{query}\t{feedback}\n")
+        for chunk_id, _ in retrieved_chunks:
+            f.write(f"{query}\t{chunk_id}\t{label}\n")
 
 
 # -----------------------------
-# Build Vector Store
+# Build Store (Run Once)
 # -----------------------------
 if __name__ == "__main__":
     docs = load_documents()
     if docs:
-        create_vector_store(docs)
+        build_vector_store(docs)
     else:
-        print("No documents found.")
+        print(" No documents found.")

@@ -1,17 +1,17 @@
-# ui.py
-
 import streamlit as st
 from rag import retrieve, log_feedback
 from generator import generate_answer
 
-st.set_page_config(page_title="RAG System", layout="wide")
+st.set_page_config("RAG System", layout="wide")
 st.title("📚 Retrieval-Augmented Generation System")
 
 query = st.text_input("Enter your question:")
 
 if query:
-    retrieved_chunks = retrieve(query)
-    answer = generate_answer(query, retrieved_chunks)
+    retrieved = retrieve(query)
+    context_texts = [text for _, text in retrieved]
+
+    answer = generate_answer(query, context_texts)
 
     col1, col2 = st.columns([2, 3])
 
@@ -26,11 +26,11 @@ if query:
         )
 
         if st.button("Submit Feedback"):
-            log_feedback(query, retrieved_chunks, feedback)
-            st.info("Feedback recorded. Thank you!")
+            log_feedback(query, retrieved, feedback == "👍 Yes")
+            st.info("Feedback saved. System will improve over time.")
 
     with col2:
         st.subheader("Retrieved Context")
-        for i, chunk in enumerate(retrieved_chunks):
+        for i, (_, chunk) in enumerate(retrieved):
             with st.expander(f"Chunk {i + 1}"):
                 st.write(chunk)
