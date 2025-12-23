@@ -5,9 +5,7 @@ tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-small")
 model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
 
 def generate_answer(query, context_chunks, max_input_length=512, max_output_length=250):
-    """
-    Generate a query-aware answer using a free local Hugging Face model.
-    """
+    
     if not context_chunks:
         return "No relevant documents found."
 
